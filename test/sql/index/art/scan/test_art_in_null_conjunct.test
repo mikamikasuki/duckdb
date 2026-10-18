@@ -1,0 +1,28 @@
+# name: test/sql/index/art/scan/test_art_in_null_conjunct.test
+# description: ART index scans preserve all IN predicates in an AND expression
+# group: [scan]
+
+statement ok
+CREATE TABLE t (c INTEGER);
+
+statement ok
+INSERT INTO t VALUES (1), (2);
+
+statement ok
+CREATE INDEX t_c ON t(c);
+
+# A candidate supplied by c = 1 must also satisfy the separate IN predicate.
+query I
+SELECT c FROM t WHERE c = 1 AND c IN (2, NULL);
+----
+
+# Both IN predicates must be intersected, even when the second has a NULL.
+query I
+SELECT c FROM t WHERE c IN (1, 5) AND c IN (2, NULL);
+----
+
+# Matching values in both IN predicates remain eligible.
+query I
+SELECT c FROM t WHERE c IN (1, 2) AND c IN (2, NULL);
+----
+2

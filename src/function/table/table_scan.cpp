@@ -754,13 +754,15 @@ struct ComparisonCondition {
 };
 
 static bool CollectValuesAndComparisonsFromExpression(const Expression &expr, value_set_t &in_values,
-                                                      vector<ComparisonCondition> &comparisons) {
+                                                      vector<ComparisonCondition> &comparisons,
+                                                      vector<value_set_t> &in_value_sets) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR &&
 	    expr.GetExpressionType() == ExpressionType::COMPARE_IN) {
 		auto &op = expr.Cast<BoundOperatorExpression>();
 		if (op.GetChildren().empty() || op.GetChildren()[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
 			return false;
 		}
+		value_set_t in_value_set;
 		for (idx_t i = 1; i < op.GetChildren().size(); i++) {
 			if (op.GetChildren()[i]->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
 				return false;
@@ -768,8 +770,10 @@ static bool CollectValuesAndComparisonsFromExpression(const Expression &expr, va
 			auto &value = op.GetChildren()[i]->Cast<BoundConstantExpression>().GetValue();
 			if (!value.IsNull()) {
 				in_values.insert(value);
+				in_value_set.insert(value);
 			}
 		}
+		in_value_sets.push_back(std::move(in_value_set));
 		return true;
 	}
 	if (BoundComparisonExpression::IsComparison(expr)) {
@@ -799,7 +803,7 @@ static bool CollectValuesAndComparisonsFromExpression(const Expression &expr, va
 	    expr.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		for (auto &child : conj.GetChildren()) {
-			if (!CollectValuesAndComparisonsFromExpression(*child, in_values, comparisons)) {
+			if (!CollectValuesAndComparisonsFromExpression(*child, in_values, comparisons, in_value_sets)) {
 				return false;
 			}
 		}
@@ -810,7 +814,7 @@ static bool CollectValuesAndComparisonsFromExpression(const Expression &expr, va
 		if (ExpressionFilter::IsRootOptionalExpression(func)) {
 			auto optional_child = ExpressionFilter::GetOptionalFilterChild(func);
 			return !optional_child ||
-			       CollectValuesAndComparisonsFromExpression(*optional_child, in_values, comparisons);
+			       CollectValuesAndComparisonsFromExpression(*optional_child, in_values, comparisons, in_value_sets);
 		}
 		if (TableFilterFunctions::IsTableFilterFunction(func.Function())) {
 			return true;
@@ -858,14 +862,24 @@ static bool ValueQualifies(const Value &value, const vector<ComparisonCondition>
 	return true;
 }
 
+static bool ValueQualifies(const Value &value, const vector<value_set_t> &in_value_sets) {
+	for (const auto &in_value_set : in_value_sets) {
+		if (in_value_set.find(value) == in_value_set.end()) {
+			return false;
+		}
+	}
+	return true;
+}
+
 static bool ExtractValuesFromExpression(const Expression &expr, value_set_t &values) {
 	value_set_t in_values;
 	vector<ComparisonCondition> comparisons;
-	if (!CollectValuesAndComparisonsFromExpression(expr, in_values, comparisons) || in_values.empty()) {
+	vector<value_set_t> in_value_sets;
+	if (!CollectValuesAndComparisonsFromExpression(expr, in_values, comparisons, in_value_sets) || in_values.empty()) {
 		return false;
 	}
 	for (auto &value : in_values) {
-		if (ValueQualifies(value, comparisons)) {
+		if (ValueQualifies(value, comparisons) && ValueQualifies(value, in_value_sets)) {
 			values.insert(value);
 		}
 	}
